@@ -1,0 +1,146 @@
+import pymoduleconnector
+from pymoduleconnector import DataType, RecordingOptions
+import time
+import numpy as np
+import matplotlib.pyplot as plt
+import tensorflow as tf
+from tensorflow.keras.models import load_model
+
+# Initializing global variables
+global predictionPlot 
+predictionPlot = 0
+
+def reset(device_name):
+    mc = pymoduleconnector.ModuleConnector(device_name)
+    xep = mc.get_xep()
+    xep.module_reset()
+    mc.close()
+    time.sleep(1)
+
+def main():
+    
+    device_name = "COM5"
+    enable_recording = 1
+    output_dir = 'C:/Users/2680850K/Desktop/XeThru Recordings/'
+
+    # Establish connection to XeThru radar
+    mc = pymoduleconnector.ModuleConnector(device_name)
+    xep = mc.get_xep()
+    print("receive ping, the value is:", hex(xep.ping()))
+    fwid = xep.get_system_info(2)
+
+    session_id = 'liam'
+    # Display system info
+    print('FirmWareID = ', fwid)
+    print('Version = ', xep.get_system_info(3))
+    print('Build = ', xep.get_system_info(4))
+    print('SerialNumber = ', xep.get_system_info(6))
+    print('VersionList = ', xep.get_system_info(7))
+    fps = 50
+
+    xep.x4driver_init()
+    xep.x4driver_set_downconversion(1)
+    xep.x4driver_set_iterations(16)
+    xep.x4driver_set_pulses_per_step(100)
+    xep.x4driver_set_dac_min(949)
+    xep.x4driver_set_dac_max(1100)
+    xep.x4driver_set_frame_area_offset(0.18)
+    xep.x4driver_set_frame_area(0.4, 5.0)
+    frames = xep.x4driver_get_frame_area()
+    frame_start = frames.start
+    frame_stop = frames.end
+
+    # Start recording if enabled
+    if enable_recording:
+        recorder = mc.get_data_recorder()
+        RecordingOptions1 = RecordingOptions()
+        RecordingOptions1.set_session_id(session_id)
+        baseband_ap_type = DataType.FloatDataType
+        recorder.start_recording(baseband_ap_type, output_dir)
+    
+    xep.x4driver_set_fps(fps)
+    infocache = np.empty((0,0))
+    
+    plt.ion()
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8))
+     
+    line1, = ax1.plot([])
+    ax1.set_title('Average Amplitude of IQ Data Over Time')
+    ax1.set_ylabel('Average Amplitude')
+    ax1.grid(True)
+    #ax1.set_ylim(0.0002, 0.00999)  # Set y-axis limits
+
+    line2, = ax2.plot([])
+    ax2.set_title('Average Phase of IQ Data Over Time')
+    ax2.set_xlabel('Time')
+    ax2.set_ylabel('Average Phase (Degree)')
+    ax2.grid(True)
+    
+    AmpReading = []
+    PhaseReading = []
+    AmpReadingNew = []
+    
+    model = load_model(r'C:\Users\2680850K\Desktop\XeThru Recordings\model_8January.h5')
+    
+    window_size = 91  # Adjust the window size to your preference
+
+    update_interval = 1  # Update the plot every 1 second, adjust as needed
+    last_update_time = time.time()
+
+    while True:
+        
+        contentID = xep.read_message_data_float().content_id
+        info = xep.read_message_data_float().info
+        data = np.asarray(xep.read_message_data_float().data)
+        data_length = len(data)
+
+        i_vec = data[0:int(data_length/2)]
+        q_vec = data[int(data_length/2):]
+        iq_vec = i_vec + 1j * q_vec
+        amplitude = np.abs(iq_vec)
+        phase = np.angle(iq_vec)
+        phase = np.rad2deg(phase)
+
+        AmpReading.extend(amplitude.ravel())
+        PhaseReading.append(np.mean(phase))
+        AmpReadingNew.append(np.mean(amplitude))
+        
+        if len(AmpReading) >= window_size:  # Display sliding window segments
+            
+            
+            input_data = np.array(AmpReading[-window_size:]).reshape(1, -1)
+            logits = model.predict(input_data)
+            predicted_class = tf.argmax(logits, axis=1).numpy()[0]
+            predictionPlot = predicted_class
+            ax1.set_title(f'Average Amplitude of IQ Data Over Time => Class Prediction {predictionPlot}')
+
+        current_time = time.time()
+        if current_time - last_update_time > update_interval:
+            # Update the plot
+            line1.set_ydata(AmpReadingNew[-200:])
+            
+            line1.set_xdata(range(len(AmpReadingNew[-200:])))
+
+            if predictionPlot == 0:
+                line1.set_color('green')
+            elif predictionPlot == 1:
+                line1.set_color('red')
+            else:
+                line1.set_color('blue')
+
+            ax1.relim()
+            ax1.autoscale_view(True,True,True)
+
+            line2.set_ydata(PhaseReading)
+            line2.set_xdata(range(len(PhaseReading)))
+            ax2.relim()
+            ax2.autoscale_view(True,True,True)
+
+            plt.draw()
+            plt.show(block=False)
+            plt.pause(0.001)
+
+            last_update_time = current_time
+
+if __name__ == "__main__":
+    main()
