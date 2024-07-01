@@ -1,2 +1,0 @@
-Sturges' Formula:
-Number of bins=log2(Number of data points)+1
